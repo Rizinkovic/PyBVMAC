@@ -57,9 +57,15 @@ def discover_bulletins(
                 params={"search": search, "per_page": per_page, "page": page},
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as FetchError below
-            if page == 1:
-                raise FetchError(f"Could not reach BVMAC media API: {exc}") from exc
-            break  # WordPress returns 400 past the last page; stop cleanly
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # WordPress commonly answers 400 for a page beyond the last one.
+            # Other failures (timeouts, 5xx, rate limits) must not silently
+            # turn a partial archive into an apparently complete result.
+            if status in (400, 404):
+                break
+            raise FetchError(
+                f"Archive discovery failed on page {page}; results may be incomplete: {exc}"
+            ) from exc
 
         items = response.json()
         if not items:
