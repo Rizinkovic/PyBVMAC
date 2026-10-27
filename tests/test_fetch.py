@@ -99,3 +99,13 @@ def test_discovery_stops_on_wordpress_end_of_pagination():
 
     assert discover_bulletins(session, max_pages=3) == []
     assert session.calls == 1
+
+
+
+def test_discovery_rejects_silently_truncated_archive():
+    session = FakeSession([
+        FakeResponse(items=[{"source_url": "https://example.test/BOC-02-01-2025.pdf"}])
+    ])
+
+    with pytest.raises(FetchError, match="Reached max_pages=1"):
+        discover_bulletins(session, max_pages=1)
