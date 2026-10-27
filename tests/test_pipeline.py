@@ -16,7 +16,7 @@ def test_backfill_batches_storage_writes(monkeypatch, tmp_path):
         )
         for day in dates
     ]
-    monkeypatch.setattr(pipeline.fetch, "discover_bulletins", lambda session: bulletins)
+    monkeypatch.setattr(pipeline.fetch, "discover_bulletins", lambda session, **kwargs: bulletins)
     monkeypatch.setattr(
         pipeline.fetch,
         "download_bulletin",
@@ -67,7 +67,7 @@ def test_backfill_resumes_from_checkpoint_without_reprocessing(monkeypatch, tmp_
         filename="2025-01-02.pdf",
         date=day,
     )
-    monkeypatch.setattr(pipeline.fetch, "discover_bulletins", lambda session: [bulletin])
+    monkeypatch.setattr(pipeline.fetch, "discover_bulletins", lambda session, **kwargs: [bulletin])
     monkeypatch.setattr(
         pipeline.fetch, "download_bulletin", lambda session, item: tmp_path / item.filename
     )
