@@ -10,11 +10,13 @@ dependency until it's proven necessary.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 import os
+import time
 
 from . import config
 from .exceptions import FetchError
@@ -38,6 +40,9 @@ def discover_bulletins(
     search: str = "BOC",
     per_page: int = 100,
     max_pages: int = 100,
+    *,
+    refresh_cache: bool = False,
+    cache_ttl_seconds: Optional[float] = None,
 ) -> list[BulletinRef]:
     """Enumerate BOC bulletins via the WordPress REST API media endpoint.
 
@@ -55,6 +60,31 @@ def discover_bulletins(
         raise ValueError("per_page must be at least 1")
     if max_pages < 1:
         raise ValueError("max_pages must be at least 1")
+    ttl = config.ARCHIVE_CACHE_TTL_SECONDS if cache_ttl_seconds is None else cache_ttl_seconds
+    if ttl < 0:
+        raise ValueError("cache_ttl_seconds must be non-negative")
+
+    # Repeated backfills reuse recent archive metadata rather than paging
+    # through the entire WordPress media library on every invocation.
+    cache_path = config.CACHE_DIR / f"archive-index-{search}-{per_page}-{max_pages}.json"
+    if not refresh_cache and ttl > 0:
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            age = time.time() - float(cached["fetched_at"])
+            if 0 <= age < ttl:
+                bulletins = [
+                    BulletinRef(
+                        url=item["url"],
+                        filename=item["filename"],
+                        date=dt.date.fromisoformat(item["date"]),
+                    )
+                    for item in cached["bulletins"]
+                ]
+                logger.info("Archive metadata cache hit: %d bulletins (age %.0fs)", len(bulletins), age)
+                return bulletins
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            # Missing, expired, or malformed cache: rebuild it from the source.
+            pass
 
     bulletins: list[BulletinRef] = []
     page = 1
@@ -113,6 +143,26 @@ def discover_bulletins(
         )
 
     bulletins.sort(key=lambda b: b.date)
+    # Save only a fully completed discovery; partial/error results never replace it.
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_path.with_name(cache_path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(
+                {
+                    "fetched_at": time.time(),
+                    "bulletins": [
+                        {"url": item.url, "filename": item.filename, "date": item.date.isoformat()}
+                        for item in bulletins
+                    ],
+                },
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, cache_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return bulletins
 
 
