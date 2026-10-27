@@ -53,25 +53,44 @@ def _validate(records: list[dict]) -> tuple[list[dict], list[dict]]:
 def process_bulletin_file(pdf_path: Path, bulletin_date: dt.date) -> BulletinRecords:
     """Parse an already-downloaded bulletin PDF."""
     source_bulletin = Path(pdf_path).name
+    stage_times = {"classify": 0.0, "pdf_parse": 0.0, "fallback_parse": 0.0, "ocr": 0.0}
     try:
-        if has_text_layer(str(pdf_path)):
+        stage_started = time.perf_counter()
+        text_layer = has_text_layer(str(pdf_path))
+        stage_times["classify"] = time.perf_counter() - stage_started
+
+        if text_layer:
+            stage_started = time.perf_counter()
             with pdfplumber.open(str(pdf_path)) as pdf:
                 equities, bonds, market_cap, index = parse_bulletin_real_layout(
                     pdf, bulletin_date, source_bulletin
                 )
+            stage_times["pdf_parse"] = time.perf_counter() - stage_started
+
             if not equities:
+                stage_started = time.perf_counter()
                 equities = parse_bulletin_pdf(
                     str(pdf_path), bulletin_date, source_bulletin
                 )
+                stage_times["fallback_parse"] = time.perf_counter() - stage_started
         else:
+            stage_started = time.perf_counter()
             equities = parse_scanned_bulletin(
                 str(pdf_path), bulletin_date, source_bulletin
             )
+            stage_times["ocr"] = time.perf_counter() - stage_started
             bonds, market_cap, index = [], None, None
     except OCRNotAvailableError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise ParseError(f"Failed to parse {source_bulletin}: {exc}") from exc
+
+    logger.info(
+        "Parse timings for %s: classify %.2fs, PDF layout %.2fs, "
+        "generic fallback %.2fs, OCR %.2fs",
+        source_bulletin, stage_times["classify"], stage_times["pdf_parse"],
+        stage_times["fallback_parse"], stage_times["ocr"],
+    )
 
     if not equities and not bonds and not market_cap and not index:
         logger.warning("No records extracted from %s", source_bulletin)
