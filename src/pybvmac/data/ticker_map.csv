@@ -1,0 +1,13 @@
+ticker,alias,name,compartment,asset_class
+SEMC,SEMC,Societe des Eaux Minerales du Cameroun,unknown,equity
+SAF,SAF,Societe Africaine Forestiere et Agricole du Cameroun,unknown,equity
+SAF,SAFACAM,Societe Africaine Forestiere et Agricole du Cameroun,unknown,equity
+SOCAP,SOCAP,Societe Camerounaise de Palmeraies,unknown,equity
+SOCAP,SOCAPALM,Societe Camerounaise de Palmeraies,unknown,equity
+REG,REG,La Regionale BANK,unknown,equity
+REG,LAREGIONALE,La Regionale BANK,unknown,equity
+BANGE,BANGE,Banco Nacional de Guinea Ecuatorial S.A,unknown,equity
+SCGRE,SCGRE,Societe Commerciale Gabonaise de Reassurance,unknown,equity
+SCGRE,SCG-RE,Societe Commerciale Gabonaise de Reassurance,unknown,equity
+BHC,BHC,BGFI Holding Corporation SA,unknown,equity
+BHC,BGFIHC,BGFI Holding Corporation SA,unknown,equity
