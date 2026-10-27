@@ -115,10 +115,13 @@ def _build_record(row: list[str], cols: dict, bulletin_date: dt.date, source_bul
     }
 
 
-def parse_equities_page(page, bulletin_date: dt.date, source_bulletin: str) -> list[dict]:
-    """Extract equity records from a page containing "MARCHE DES ACTIONS"."""
+def parse_equities_page(
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
+) -> list[dict]:
+    """Extract equity records; accept precomputed grid rows to avoid repeat work."""
     records = []
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if _is_equity_row(row) and _cell(row, EQUITY_COLUMNS["mnemo"]):
             records.append(_build_record(row, EQUITY_COLUMNS, bulletin_date, source_bulletin))
     return records
