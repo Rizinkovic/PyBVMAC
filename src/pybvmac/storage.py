@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
+import os
 
 import pandas as pd
 
@@ -82,12 +83,24 @@ def load(kind: str = "equities") -> pd.DataFrame:
 
 
 def save_all(df: pd.DataFrame, kind: str = "equities") -> Path:
-    """Overwrite the dataset for a given kind with ``df``."""
+    """Atomically replace a canonical dataset with ``df``.
+
+    Write to a sibling temporary file first. If serialization or the process
+    fails, the previous complete dataset remains available.
+    """
     path = _dataset_path(kind)
-    if path.suffix == ".parquet":
-        df.to_parquet(path, index=False)
-    else:
-        df.to_csv(path, index=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        if path.suffix == ".parquet":
+            df.to_parquet(temporary, index=False)
+        else:
+            df.to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        # A failed write may leave a partial temporary file behind.
+        if temporary.exists():
+            temporary.unlink()
     return path
 
 
