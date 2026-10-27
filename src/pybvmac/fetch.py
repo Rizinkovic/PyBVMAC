@@ -10,6 +10,7 @@ dependency until it's proven necessary.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,8 @@ from . import config
 from .exceptions import FetchError
 from .http_client import PoliteSession
 from .normalize import bulletin_filename_for_date, parse_boc_date_from_filename
+
+logger = logging.getLogger("pybvmac.fetch")
 
 
 @dataclass
@@ -71,6 +74,20 @@ def discover_bulletins(
         if not items:
             break
 
+        # WordPress normally provides X-WP-TotalPages. Respect it when
+        # present, and never silently present a max_pages-truncated archive
+        # as complete.
+        headers = getattr(response, "headers", {}) or {}
+        try:
+            total_pages = int(headers.get("X-WP-TotalPages", 0))
+        except (TypeError, ValueError):
+            total_pages = 0
+        if total_pages > max_pages:
+            raise FetchError(
+                f"Archive has {total_pages} pages, exceeding max_pages={max_pages}; "
+                "increase max_pages to collect the full archive"
+            )
+
         for item in items:
             source_url = item.get("source_url")
             if not source_url:
@@ -82,6 +99,12 @@ def discover_bulletins(
             bulletins.append(BulletinRef(url=source_url, filename=filename, date=date))
 
         page += 1
+
+    if page > max_pages and not total_pages:
+        raise FetchError(
+            f"Reached max_pages={max_pages} without confirming the end of the archive; "
+            "increase max_pages or inspect the WordPress pagination headers"
+        )
 
     bulletins.sort(key=lambda b: b.date)
     return bulletins
