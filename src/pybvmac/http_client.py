@@ -10,6 +10,7 @@ explicitly (NFR "Legal and ethical compliance"):
 """
 from __future__ import annotations
 
+import logging
 import time
 import urllib.robotparser
 from urllib.parse import urlparse
@@ -19,6 +20,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from . import config
+
+logger = logging.getLogger("pybvmac.http_client")
 
 
 class PoliteSession:
@@ -66,11 +69,26 @@ class PoliteSession:
         if parser is None:
             parser = urllib.robotparser.RobotFileParser()
             parser.set_url(f"{origin}/robots.txt")
+            started = time.perf_counter()
             try:
-                parser.read()
-            except OSError:
-                # If robots.txt cannot be fetched, fail open but stay
-                # conservative elsewhere (rate limiting still applies).
+                # RobotFileParser.read() has no convenient per-call timeout.
+                # Fetch explicitly so an unreachable robots.txt cannot stall
+                # a backfill indefinitely on a weak connection.
+                response = self.session.get(
+                    f"{origin}/robots.txt",
+                    timeout=min(self.timeout, 10),
+                )
+                response.raise_for_status()
+                parser.parse(response.text.splitlines())
+                logger.info(
+                    "robots.txt fetched for %s in %.2fs",
+                    origin, time.perf_counter() - started,
+                )
+            except (OSError, requests.RequestException) as exc:
+                logger.warning(
+                    "Could not fetch robots.txt for %s after %.2fs (%s); continuing conservatively",
+                    origin, time.perf_counter() - started, exc,
+                )
                 parser = None
             self._robots_cache[origin] = parser
         if parser is None:
@@ -83,8 +101,17 @@ class PoliteSession:
             raise PermissionError(f"robots.txt disallows fetching: {url}")
         self._throttle()
         kwargs.setdefault("timeout", self.timeout)
-        response = self.session.get(url, **kwargs)
-        response.raise_for_status()
+        started = time.perf_counter()
+        try:
+            response = self.session.get(url, **kwargs)
+            response.raise_for_status()
+        except Exception:
+            logger.warning("HTTP GET %s failed after %.2fs", urlparse(url).path, time.perf_counter() - started)
+            raise
+        logger.info(
+            "HTTP GET %s completed in %.2fs (status %s)",
+            urlparse(url).path, time.perf_counter() - started, response.status_code,
+        )
         return response
 
     def head(self, url: str, **kwargs) -> requests.Response:
@@ -92,6 +119,15 @@ class PoliteSession:
             raise PermissionError(f"robots.txt disallows fetching: {url}")
         self._throttle()
         kwargs.setdefault("timeout", self.timeout)
-        response = self.session.head(url, **kwargs)
-        response.raise_for_status()
+        started = time.perf_counter()
+        try:
+            response = self.session.head(url, **kwargs)
+            response.raise_for_status()
+        except Exception:
+            logger.warning("HTTP HEAD %s failed after %.2fs", urlparse(url).path, time.perf_counter() - started)
+            raise
+        logger.info(
+            "HTTP HEAD %s completed in %.2fs (status %s)",
+            urlparse(url).path, time.perf_counter() - started, response.status_code,
+        )
         return response
