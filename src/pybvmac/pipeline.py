@@ -69,7 +69,9 @@ def process_bulletin_file(pdf_path: Path, bulletin_date: dt.date) -> BulletinRec
                 equities, bonds, market_cap, index = parse_bulletin_real_layout(
                     pdf, bulletin_date, source_bulletin
                 )
-            if not equities and not bonds:
+            if not equities:
+                # The generic parser only supplements equities; retain any
+                # bonds, market-cap, and index records found by the real parser.
                 equities = parse_bulletin_pdf(str(pdf_path), bulletin_date, source_bulletin)
         else:
             equities = parse_scanned_bulletin(str(pdf_path), bulletin_date, source_bulletin)
@@ -137,17 +139,61 @@ def backfill(
         return 0
 
     in_range = [b for b in bulletins if start <= b.date <= end]
+    # Accumulate parsed records in memory and persist in batches. Calling
+    # storage.append() for every bulletin repeatedly reloads, concatenates,
+    # sorts, and rewrites the growing history, making large backfills
+    # needlessly quadratic in disk I/O.
+    pending: dict[str, list[dict]] = {
+        "equities": [],
+        "bonds": [],
+        "market_cap": [],
+        "index": [],
+    }
+    pending_review: list[dict] = []
     processed = 0
-    for bulletin in in_range:
+
+    for position, bulletin in enumerate(in_range, start=1):
         try:
             path = fetch.download_bulletin(session, bulletin)
             records = process_bulletin_file(path, bulletin.date)
-            _store(records)
-            if records.equities or records.bonds:
+            for kind, items in (
+                ("equities", records.equities),
+                ("bonds", records.bonds),
+                ("market_cap", [records.market_cap] if records.market_cap else []),
+                ("index", [records.index] if records.index else []),
+            ):
+                good, review = _validate(items)
+                pending[kind].extend(good)
+                pending_review.extend(review)
+
+            if records.equities or records.bonds or records.market_cap or records.index:
                 processed += 1
+            else:
+                logger.warning(
+                    "No market records extracted from %s; bulletin counted as failed",
+                    bulletin.filename,
+                )
+
+            if position % 25 == 0 or position == len(in_range):
+                logger.info(
+                    "Backfill progress: %d/%d bulletins; %d successful",
+                    position, len(in_range), processed,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.error("Skipping %s: %s", bulletin.filename, exc)
-            continue
 
-    logger.info("Backfill complete: %d/%d bulletins processed", processed, len(in_range))
+    # One read/merge/write per dataset instead of per bulletin.
+    for kind, items in pending.items():
+        if items:
+            storage.append(items, kind=kind)
+    if pending_review:
+        storage.flag_for_review(pending_review)
+        logger.warning("%d record(s) flagged for manual review", len(pending_review))
+
+    logger.info(
+        "Backfill complete: %d/%d bulletins processed; stored %d equities, "
+        "%d bonds, %d market-cap records, and %d index records",
+        processed, len(in_range), len(pending["equities"]), len(pending["bonds"]),
+        len(pending["market_cap"]), len(pending["index"]),
+    )
     return processed
