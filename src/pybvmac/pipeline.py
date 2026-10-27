@@ -181,6 +181,7 @@ def backfill(
     resume: bool = True,
     checkpoint_every: int = _CHECKPOINT_EVERY,
     state_path: Optional[Path] = None,
+    refresh_archive: bool = False,
 ) -> int:
     """Discover and process bulletins in [start, end], checkpointing progress.
 
@@ -196,7 +197,7 @@ def backfill(
 
     discovery_started = time.perf_counter()
     try:
-        bulletins = fetch.discover_bulletins(session)
+        bulletins = fetch.discover_bulletins(session, refresh_cache=refresh_archive)
     except FetchError as exc:
         logger.error("Could not enumerate the BVMAC archive: %s", exc)
         return 0
