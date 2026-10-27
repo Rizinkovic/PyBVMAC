@@ -5,6 +5,7 @@ import datetime as dt
 import pytest
 import requests
 
+from pybvmac import config
 from pybvmac.exceptions import FetchError
 from pybvmac.fetch import BulletinRef, discover_bulletins, download_bulletin
 
@@ -109,3 +110,55 @@ def test_discovery_rejects_silently_truncated_archive():
 
     with pytest.raises(FetchError, match="Reached max_pages=1"):
         discover_bulletins(session, max_pages=1)
+
+
+
+def test_discovery_reuses_fresh_archive_metadata_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    response = FakeResponse(items=[
+        {"source_url": "https://example.test/BOC-02-01-2025.pdf"}
+    ])
+    session = FakeSession([response, FakeResponse(items=[])])
+    first = discover_bulletins(session, per_page=10, max_pages=3)
+    assert len(first) == 1
+    assert session.calls == 2
+
+    second_session = FakeSession([])
+    second = discover_bulletins(second_session, per_page=10, max_pages=3)
+    assert [(item.filename, item.date) for item in second] == [
+        (item.filename, item.date) for item in first
+    ]
+    assert second_session.calls == 0
+
+
+def test_discovery_can_force_refresh_of_metadata_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    first_session = FakeSession([
+        FakeResponse(items=[
+            {"source_url": "https://example.test/BOC-02-01-2025.pdf"}
+        ]),
+        FakeResponse(items=[]),
+    ])
+    discover_bulletins(first_session, per_page=10, max_pages=3)
+
+    refreshed_session = FakeSession([FakeResponse(items=[])])
+    refreshed = discover_bulletins(
+        refreshed_session, per_page=10, max_pages=3, refresh_cache=True
+    )
+    assert refreshed == []
+    assert refreshed_session.calls == 1
+
+
+def test_discovery_expired_cache_is_refetched(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+    initial = FakeSession([FakeResponse(items=[])])
+    discover_bulletins(initial, max_pages=3, cache_ttl_seconds=60)
+
+    refreshed = FakeSession([FakeResponse(items=[])])
+    discover_bulletins(refreshed, max_pages=3, cache_ttl_seconds=0)
+    assert refreshed.calls == 1
+
+
+def test_discovery_rejects_negative_cache_ttl():
+    with pytest.raises(ValueError, match="cache_ttl_seconds must be non-negative"):
+        discover_bulletins(FakeSession([]), cache_ttl_seconds=-1)
