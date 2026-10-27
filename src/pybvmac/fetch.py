@@ -70,7 +70,7 @@ def discover_bulletins(
             # WordPress commonly answers 400 for a page beyond the last one.
             # Other failures (timeouts, 5xx, rate limits) must not silently
             # turn a partial archive into an apparently complete result.
-            if status in (400, 404):
+            if status in (400, 404) and page > 1:
                 break
             raise FetchError(
                 f"Archive discovery failed on page {page}; results may be incomplete: {exc}"
