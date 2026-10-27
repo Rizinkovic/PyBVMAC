@@ -13,6 +13,7 @@ import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import os
 
 from . import config
 from .exceptions import FetchError
@@ -88,11 +89,36 @@ def download_bulletin(
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / bulletin.filename
 
-    if dest_path.exists() and dest_path.stat().st_size > 0:
+    def is_valid_pdf(path: Path) -> bool:
+        try:
+            if path.stat().st_size < 8:
+                return False
+            with path.open("rb") as stream:
+                # PDF headers are normally at byte 0; allow a small leading
+                # offset because some valid generators prepend metadata.
+                return b"%PDF-" in stream.read(1024)
+        except OSError:
+            return False
+
+    if is_valid_pdf(dest_path):
         return dest_path
+    # Remove corrupt/stale cache entries so they cannot be reused forever.
+    dest_path.unlink(missing_ok=True)
 
     response = session.get(bulletin.url)
-    dest_path.write_bytes(response.content)
+    content = response.content
+    if len(content) < 8 or b"%PDF-" not in content[:1024]:
+        raise FetchError(
+            f"Downloaded content for {bulletin.filename} is not a valid PDF "
+            f"(HTTP {response.status_code}, {len(content)} bytes)"
+        )
+
+    temporary = dest_path.with_name(dest_path.name + ".part")
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, dest_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return dest_path
 
 
