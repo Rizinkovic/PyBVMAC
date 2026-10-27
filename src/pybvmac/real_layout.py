@@ -207,24 +207,70 @@ def parse_bulletin(
     market_cap: Optional[dict] = None
     index: Optional[dict] = None
 
+    bond_section_active = False
+    pages_with_tables = 0
+
     for page in pdf.pages:
-        # Grid reconstruction crops and extracts text from many cells, so it
-        # is expensive. Build it once per page and share it across all parsers.
-        rows = extract_grid(page)
-        equities.extend(
-            parse_equities_page(page, bulletin_date, source_bulletin, rows=rows)
-        )
-        bonds.extend(
-            parse_bonds_page(page, bulletin_date, source_bulletin, rows=rows)
-        )
+        # Text extraction is much cheaper than reconstructing every cell from
+        # vector geometry. Only build the expensive grid on likely market
+        # pages. Bond tables can continue onto pages without a repeated title,
+        # so keep scanning the bond section until the market-cap section starts.
         text_upper = (page.extract_text() or "").upper()
-        if market_cap is None and "CAPITALISATION BOURSIERE" in text_upper:
+        has_equity_heading = "MARCHE DES ACTIONS" in text_upper
+        has_bond_heading = any(
+            marker in text_upper
+            for marker in (
+                "MARCHE DES OBLIGATIONS",
+                "OBLIGATIONS DES ETATS",
+                "OBLIGATIONS REGIONALES",
+                "OBLIGATIONS PRIVEES",
+            )
+        )
+        has_market_cap_heading = "CAPITALISATION BOURSIERE" in text_upper
+        has_index_heading = "ALL SHARE INDEX" in text_upper
+
+        if has_bond_heading:
+            bond_section_active = True
+        if has_market_cap_heading:
+            bond_section_active = False
+
+        needs_grid = (
+            has_equity_heading
+            or (bond_section_active and not has_market_cap_heading)
+            or has_market_cap_heading
+            or has_index_heading
+            # A textless page in a text-bearing PDF may be a continuation
+            # page whose table is represented only by vector geometry.
+            or not text_upper.strip()
+        )
+        if not needs_grid:
+            continue
+
+        rows = extract_grid(page)
+        pages_with_tables += 1
+
+        if has_equity_heading:
+            equities.extend(
+                parse_equities_page(page, bulletin_date, source_bulletin, rows=rows)
+            )
+        if bond_section_active and not has_market_cap_heading:
+            bonds.extend(
+                parse_bonds_page(page, bulletin_date, source_bulletin, rows=rows)
+            )
+        if market_cap is None and has_market_cap_heading:
             market_cap = parse_market_cap_page(
                 page, bulletin_date, source_bulletin, rows=rows
             )
-        if index is None and "ALL SHARE INDEX" in text_upper:
+        if index is None and has_index_heading:
             index = parse_index_page(
                 page, bulletin_date, source_bulletin, rows=rows
             )
+
+    # Kept as a debug-level diagnostic so normal runs remain readable.
+    import logging
+    logging.getLogger("pybvmac").info(
+        "Real-layout parser scanned %d/%d pages for %s",
+        pages_with_tables, len(pdf.pages), source_bulletin,
+    )
 
     return equities, bonds, market_cap, index
