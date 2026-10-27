@@ -144,7 +144,7 @@ recalibrate.
 ## Development
 
 ```bash
-git clone https://github.com/song-richard/pybvmac
+git clone https://github.com/Rizinkovic/PyBVMAC
 cd pybvmac
 pip install -e ".[dev,ocr,parquet]"
 pytest
