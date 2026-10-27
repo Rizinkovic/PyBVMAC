@@ -124,19 +124,21 @@ def parse_equities_page(page, bulletin_date: dt.date, source_bulletin: str) -> l
     return records
 
 
-def parse_bonds_page(page, bulletin_date: dt.date, source_bulletin: str) -> list[dict]:
-    """Extract bond records from a page containing any of the "OBLIGATIONS
-    DES ETATS / REGIONALES / PRIVEES" tables (any number of them per page).
-    """
+def parse_bonds_page(
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
+) -> list[dict]:
+    """Extract bond records; accept precomputed grid rows to avoid repeat work."""
     records = []
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if _is_bond_row(row) and _cell(row, BOND_COLUMNS["mnemo"]):
             records.append(_build_record(row, BOND_COLUMNS, bulletin_date, source_bulletin))
     return records
 
 
 def parse_market_cap_page(
-    page, bulletin_date: dt.date, source_bulletin: str
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
 ) -> Optional[dict]:
     """Extract the market-cap total from the "CAPITALISATION BOURSIERE" page.
 
@@ -144,7 +146,7 @@ def parse_market_cap_page(
     to last is "Total") and reads the final column — the global
     ("Globale") capitalization figure.
     """
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if len(row) < 3:
             continue
         if any(squeeze(cell) == "Total" for cell in row):
@@ -159,7 +161,8 @@ def parse_market_cap_page(
 
 
 def parse_index_page(
-    page, bulletin_date: dt.date, source_bulletin: str
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
 ) -> Optional[dict]:
     """Extract the BVMAC All Share Index (BVMAC-AS) value from the cover
     page. The bulletin also plots a small history chart there, but that's a
@@ -168,7 +171,7 @@ def parse_index_page(
     """
     index_value = None
     change_pct = None
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if len(row) < 2:
             continue
         label = squeeze(row[0])
@@ -202,12 +205,23 @@ def parse_bulletin(
     index: Optional[dict] = None
 
     for page in pdf.pages:
-        equities.extend(parse_equities_page(page, bulletin_date, source_bulletin))
-        bonds.extend(parse_bonds_page(page, bulletin_date, source_bulletin))
+        # Grid reconstruction crops and extracts text from many cells, so it
+        # is expensive. Build it once per page and share it across all parsers.
+        rows = extract_grid(page)
+        equities.extend(
+            parse_equities_page(page, bulletin_date, source_bulletin, rows=rows)
+        )
+        bonds.extend(
+            parse_bonds_page(page, bulletin_date, source_bulletin, rows=rows)
+        )
         text_upper = (page.extract_text() or "").upper()
         if market_cap is None and "CAPITALISATION BOURSIERE" in text_upper:
-            market_cap = parse_market_cap_page(page, bulletin_date, source_bulletin)
+            market_cap = parse_market_cap_page(
+                page, bulletin_date, source_bulletin, rows=rows
+            )
         if index is None and "ALL SHARE INDEX" in text_upper:
-            index = parse_index_page(page, bulletin_date, source_bulletin)
+            index = parse_index_page(
+                page, bulletin_date, source_bulletin, rows=rows
+            )
 
     return equities, bonds, market_cap, index
