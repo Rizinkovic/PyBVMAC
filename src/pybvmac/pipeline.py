@@ -248,11 +248,24 @@ def backfill(
         try:
             stage_started = time.perf_counter()
             path = fetch.download_bulletin(session, bulletin)
-            timings["download_cache"] += time.perf_counter() - stage_started
+            bulletin_download_seconds = time.perf_counter() - stage_started
+            timings["download_cache"] += bulletin_download_seconds
 
             stage_started = time.perf_counter()
             records = process_bulletin_file(path, bulletin.date)
-            timings["parse"] += time.perf_counter() - stage_started
+            bulletin_parse_seconds = time.perf_counter() - stage_started
+            timings["parse"] += bulletin_parse_seconds
+            logger.info(
+                "Backfill bulletin %s: download/cache %.2fs, parse %.2fs, records "
+                "equities=%d bonds=%d market_cap=%d index=%d",
+                bulletin.filename,
+                bulletin_download_seconds,
+                bulletin_parse_seconds,
+                len(records.equities),
+                len(records.bonds),
+                int(records.market_cap is not None),
+                int(records.index is not None),
+            )
 
             has_records = bool(
                 records.equities or records.bonds or records.market_cap or records.index
