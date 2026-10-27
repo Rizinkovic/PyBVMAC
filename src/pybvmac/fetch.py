@@ -51,8 +51,14 @@ def discover_bulletins(
     rather than implemented here, per the "no overengineering" principle:
     build the primary path first, add the fallback once it's actually needed.
     """
+    if per_page < 1:
+        raise ValueError("per_page must be at least 1")
+    if max_pages < 1:
+        raise ValueError("max_pages must be at least 1")
+
     bulletins: list[BulletinRef] = []
     page = 1
+    total_pages = 0
     while page <= max_pages:
         try:
             response = session.get(
