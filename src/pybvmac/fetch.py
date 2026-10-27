@@ -90,12 +90,21 @@ def discover_bulletins(
     page = 1
     total_pages = 0
     while page <= max_pages:
+        request_started = time.perf_counter()
         try:
             response = session.get(
                 config.WP_MEDIA_ENDPOINT,
                 params={"search": search, "per_page": per_page, "page": page},
             )
-        except Exception as exc:  # noqa: BLE001 - surfaced as FetchError below
+            logger.info(
+                "Archive page %d request completed in %.2fs",
+                page, time.perf_counter() - request_started,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Archive page %d request failed after %.2fs",
+                page, time.perf_counter() - request_started,
+            )  # noqa: BLE001 - surfaced as FetchError below
             status = getattr(getattr(exc, "response", None), "status_code", None)
             # WordPress commonly answers 400 for a page beyond the last one.
             # Other failures (timeouts, 5xx, rate limits) must not silently
@@ -186,24 +195,43 @@ def download_bulletin(
             return False
 
     if is_valid_pdf(dest_path):
+        logger.info("PDF cache hit: %s (%d bytes)", bulletin.filename, dest_path.stat().st_size)
         return dest_path
     # Remove corrupt/stale cache entries so they cannot be reused forever.
     dest_path.unlink(missing_ok=True)
 
-    response = session.get(bulletin.url)
-    content = response.content
-    if len(content) < 8 or b"%PDF-" not in content[:1024]:
-        raise FetchError(
-            f"Downloaded content for {bulletin.filename} is not a valid PDF "
-            f"(HTTP {response.status_code}, {len(content)} bytes)"
-        )
-
+    started = time.perf_counter()
     temporary = dest_path.with_name(dest_path.name + ".part")
+    size = 0
+    header = bytearray()
     try:
-        temporary.write_bytes(content)
+        # Stream to disk instead of holding the entire PDF in memory. This is
+        # friendlier to low-memory machines and slow/unstable connections.
+        response = session.get(bulletin.url, stream=True)
+        iterator = getattr(response, "iter_content", None)
+        chunks = iterator(chunk_size=64 * 1024) if callable(iterator) else (response.content,)
+        with temporary.open("wb") as stream:
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                if len(header) < 1024:
+                    header.extend(chunk[: 1024 - len(header)])
+                stream.write(chunk)
+                size += len(chunk)
+
+        if size < 8 or b"%PDF-" not in header:
+            raise FetchError(
+                f"Downloaded content for {bulletin.filename} is not a valid PDF "
+                f"(HTTP {response.status_code}, {size} bytes)"
+            )
         os.replace(temporary, dest_path)
     finally:
         temporary.unlink(missing_ok=True)
+
+    logger.info(
+        "PDF downloaded: %s (%d bytes) in %.2fs",
+        bulletin.filename, size, time.perf_counter() - started,
+    )
     return dest_path
 
 
