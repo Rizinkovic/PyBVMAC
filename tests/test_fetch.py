@@ -10,6 +10,11 @@ from pybvmac.exceptions import FetchError
 from pybvmac.fetch import BulletinRef, discover_bulletins, download_bulletin
 
 
+@pytest.fixture(autouse=True)
+def isolate_archive_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
+
+
 class FakeResponse:
     def __init__(self, content: bytes = b"", items=None, status_code: int = 200):
         self.content = content
