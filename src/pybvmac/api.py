@@ -96,9 +96,8 @@ def backfill(
     ``Ticker``/``Bond``/``download``/``bonds``/``market_cap``/
     ``all_share_index`` to read from. ``end`` defaults to today.
 
-    Returns the number of bulletins successfully processed. This is a
-    network operation and can take a while for a wide date range — pass
-    ``-v`` on the CLI equivalent (``pybvmac backfill``) to see progress.
+    Returns the number of bulletins successfully processed. Archive metadata
+    is cached temporarily; set ``refresh_archive=True`` to force a fresh listing.
     """
     start_date = dt.date.fromisoformat(start)
     end_date = dt.date.fromisoformat(end) if end else None
