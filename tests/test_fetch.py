@@ -24,6 +24,10 @@ class FakeResponse:
     def json(self):
         return self._items
 
+    def iter_content(self, chunk_size=64 * 1024):
+        for offset in range(0, len(self.content), chunk_size):
+            yield self.content[offset : offset + chunk_size]
+
 
 class FakeSession:
     def __init__(self, responses):
