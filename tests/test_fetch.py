@@ -93,7 +93,7 @@ def test_discovery_does_not_silently_accept_partial_archive():
     first_page = FakeResponse(
         items=[
             {
-                "source_url": "https://example.test/BOC-02-01-2025.pdf",
+                "source_url": "https://example.test/BOC-BVMAC-02-01-2025.pdf",
             }
         ]
     )
@@ -114,7 +114,7 @@ def test_discovery_stops_on_wordpress_end_of_pagination():
 
 def test_discovery_rejects_silently_truncated_archive():
     session = FakeSession([
-        FakeResponse(items=[{"source_url": "https://example.test/BOC-02-01-2025.pdf"}])
+        FakeResponse(items=[{"source_url": "https://example.test/BOC-BVMAC-02-01-2025.pdf"}])
     ])
 
     with pytest.raises(FetchError, match="Reached max_pages=1"):
@@ -125,7 +125,7 @@ def test_discovery_rejects_silently_truncated_archive():
 def test_discovery_reuses_fresh_archive_metadata_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
     response = FakeResponse(items=[
-        {"source_url": "https://example.test/BOC-02-01-2025.pdf"}
+        {"source_url": "https://example.test/BOC-BVMAC-02-01-2025.pdf"}
     ])
     session = FakeSession([response, FakeResponse(items=[])])
     first = discover_bulletins(session, per_page=10, max_pages=3)
@@ -144,7 +144,7 @@ def test_discovery_can_force_refresh_of_metadata_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path)
     first_session = FakeSession([
         FakeResponse(items=[
-            {"source_url": "https://example.test/BOC-02-01-2025.pdf"}
+            {"source_url": "https://example.test/BOC-BVMAC-02-01-2025.pdf"}
         ]),
         FakeResponse(items=[]),
     ])
