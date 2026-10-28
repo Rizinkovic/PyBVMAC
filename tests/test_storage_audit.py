@@ -55,3 +55,20 @@ def test_audit_empty_dataset_reports_zero_rows(tmp_path, monkeypatch):
 def test_audit_rejects_unknown_dataset_kind():
     with pytest.raises(ValueError, match="kind must be"):
         storage.audit("stocks")
+
+
+
+def test_cli_audit_command_accepts_dataset_filter(monkeypatch, capsys):
+    from pybvmac import cli
+
+    monkeypatch.setattr(
+        cli.storage,
+        "audit",
+        lambda kind: {"equities": {"rows": 7}, "requested_kind": kind},
+    )
+
+    cli.main(["audit", "--kind", "equities"])
+
+    output = capsys.readouterr().out
+    assert '"rows": 7' in output
+    assert '"requested_kind": "equities"' in output
