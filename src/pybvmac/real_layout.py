@@ -209,25 +209,45 @@ def parse_bulletin(
 
     bond_section_active = False
     pages_with_tables = 0
+    table_section_ended = False
 
     for page in pdf.pages:
         # Text extraction is much cheaper than reconstructing every cell from
-        # vector geometry. Only build the expensive grid on likely market
-        # pages. Bond tables can continue onto pages without a repeated title,
-        # so keep scanning the bond section until the market-cap section starts.
-        text_upper = (page.extract_text() or "").upper()
-        has_equity_heading = "MARCHE DES ACTIONS" in text_upper
+        # vector geometry. Some continuation-page headings are spaced out by
+        # pdfplumber, so compare a whitespace-free copy as well.
+        page_text = page.extract_text() or ""
+        text_upper = page_text.upper()
+        compact_text = re.sub(r"\\s+", "", text_upper)
+
+        # The market tables precede the bulletin commentary and company
+        # profiles. Stop at the commentary divider rather than allowing a
+        # bond heading on an earlier page to trigger grid extraction for the
+        # rest of the document.
+        if "COMMENTAIRESDUBULLETINOFFICIELDELACOTE" in compact_text:
+            table_section_ended = True
+            break
+
+        has_equity_heading = (
+            "MARCHE DES ACTIONS" in text_upper
+            or "MARCHEDESACTIONS" in compact_text
+        )
         has_bond_heading = any(
-            marker in text_upper
+            marker in compact_text
             for marker in (
-                "MARCHE DES OBLIGATIONS",
-                "OBLIGATIONS DES ETATS",
-                "OBLIGATIONS REGIONALES",
-                "OBLIGATIONS PRIVEES",
+                "MARCHEDESOBLIGATIONS",
+                "OBLIGATIONSDES ETATS".replace(" ", ""),
+                "OBLIGATIONSREGIONALES",
+                "OBLIGATIONSPRIVEES",
             )
         )
-        has_market_cap_heading = "CAPITALISATION BOURSIERE" in text_upper
-        has_index_heading = "ALL SHARE INDEX" in text_upper
+        has_market_cap_heading = (
+            "CAPITALISATION BOURSIERE" in text_upper
+            or "CAPITALISATIONBOURSIERE" in compact_text
+        )
+        has_index_heading = (
+            "ALL SHARE INDEX" in text_upper
+            or "ALLSHAREINDEX" in compact_text
+        )
 
         if has_bond_heading:
             bond_section_active = True
@@ -239,8 +259,6 @@ def parse_bulletin(
             or (bond_section_active and not has_market_cap_heading)
             or has_market_cap_heading
             or has_index_heading
-            # A textless page in a text-bearing PDF may be a continuation
-            # page whose table is represented only by vector geometry.
             or not text_upper.strip()
         )
         if not needs_grid:
