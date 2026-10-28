@@ -103,3 +103,33 @@ def test_backfill_resumes_from_checkpoint_without_reprocessing(monkeypatch, tmp_
     assert pipeline.backfill(day, day, session=object(), state_path=state_path) == 0
     assert len(parse_calls) == 1
     assert len(writes) == 1
+
+
+
+def test_validate_flags_trading_record_without_close_price():
+    record = {
+        "date": dt.date(2026, 1, 2),
+        "ticker": "SOCAP",
+        "close_price": None,
+        "is_trading_day": True,
+        "extraction_method": "text_parse",
+        "confidence_score": 1.0,
+    }
+
+    good, review = pipeline._validate([record], require_price=True)
+
+    assert good == []
+    assert review == [record]
+
+
+def test_validate_allows_index_record_without_close_price_field():
+    record = {
+        "date": dt.date(2026, 1, 2),
+        "index_value": 1162.39,
+        "change_pct": 0.0,
+    }
+
+    good, review = pipeline._validate([record])
+
+    assert good == [record]
+    assert review == []
