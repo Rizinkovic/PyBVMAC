@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import logging
 import sys
 
-from . import api, pipeline
+from . import api, pipeline, storage
 from .ticker import Bond, Ticker
 
 
@@ -60,6 +61,12 @@ def _cmd_index(args: argparse.Namespace) -> None:
     print(df.to_string())
 
 
+
+def _cmd_audit(args: argparse.Namespace) -> None:
+    """Print a read-only integrity summary of locally stored datasets."""
+    print(json.dumps(storage.audit(args.kind), indent=2, ensure_ascii=False))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pybvmac", description=__doc__)
     parser.add_argument(
@@ -92,6 +99,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_index.add_argument("--start", help="YYYY-MM-DD")
     p_index.add_argument("--end", help="YYYY-MM-DD")
     p_index.set_defaults(func=_cmd_index)
+
+    p_audit = sub.add_parser("audit", help="check local dataset integrity")
+    p_audit.add_argument(
+        "--kind",
+        choices=["all", "equities", "bonds", "market_cap", "index"],
+        default="all",
+        help="dataset to audit (default: all)",
+    )
+    p_audit.set_defaults(func=_cmd_audit)
 
     return parser
 
