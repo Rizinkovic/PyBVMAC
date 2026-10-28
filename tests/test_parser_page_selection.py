@@ -1,6 +1,8 @@
 import datetime as dt
 import logging
 
+import pytest
+
 from pybvmac import real_layout
 
 
@@ -52,3 +54,16 @@ def test_parser_stops_at_spaced_commentary_heading_and_reports_counts(monkeypatc
         "bond-continuation-3",
     ]
     assert "Real-layout parser visited 7/9 pages and extracted grids from 6 for BOC-20260319.pdf" in caplog.text
+
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "COMMENTAIR ES DU BULLETIN OFFICIEL DE LA COTE",
+        "C O M M E N T A I R E S D U B U L L E T I N O F F I C I E L D E L A C O T E",
+        "COMMENTAIRES DU BULLETIN OFFICIEL DE LA COTÉ",
+    ],
+)
+def test_heading_normalization_handles_spacing_and_accents(heading):
+    assert real_layout._compact_heading(heading) == "COMMENTAIRESDUBULLETINOFFICIELDELACOTE"
