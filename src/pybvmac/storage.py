@@ -160,7 +160,7 @@ def audit(kind: str = "all") -> dict[str, dict]:
             "date_min": None,
             "date_max": None,
             "duplicate_keys": 0,
-            "missing_dates": 0,
+            "invalid_dates": 0,
             "invalid_numeric_values": 0,
         }
         if df.empty:
@@ -172,7 +172,7 @@ def audit(kind: str = "all") -> dict[str, dict]:
         if not valid_dates.empty:
             report["date_min"] = valid_dates.min().date().isoformat()
             report["date_max"] = valid_dates.max().date().isoformat()
-        report["missing_dates"] = int(dates.isna().sum())
+        report["invalid_dates"] = int(dates.isna().sum())
 
         keys = [key for key in _DEDUPE_KEYS[dataset_kind] if key in df.columns]
         if keys:
@@ -190,7 +190,13 @@ def audit(kind: str = "all") -> dict[str, dict]:
                 continue
             values = pd.to_numeric(df[column], errors="coerce")
             invalid |= values.isna() | (values < 0)
+            if column in {"close_price", "market_cap_fcfa", "index_value"}:
+                invalid |= values.notna() & (values <= 0)
         report["invalid_numeric_values"] = int(invalid.sum())
+        report["missing_source_bulletins"] = int(
+            df["source_bulletin"].isna().sum()
+            if "source_bulletin" in df.columns else len(df)
+        )
 
         if dataset_kind in {"equities", "bonds"}:
             report["missing_tickers"] = int(
