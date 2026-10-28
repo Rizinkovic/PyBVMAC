@@ -88,12 +88,21 @@ _CID_ARTIFACT_RE = re.compile(r"\(cid:\d+\)")
 
 
 def _cell(row: list[str], idx: int) -> str:
+    """Read a compact identifier/numeric cell, removing PDF glyph spacing."""
     if idx >= len(row):
         return ""
     text = squeeze(row[idx])
     # pdfplumber renders a handful of glyphs it can't map (typically an
     # apostrophe in these bulletins) as a literal "(cid:N)" placeholder.
     return _CID_ARTIFACT_RE.sub("", text)
+
+
+def _text_cell(row: list[str], idx: int) -> str:
+    """Read a free-text cell while preserving real spaces between words."""
+    if idx >= len(row):
+        return ""
+    text = " ".join((row[idx] or "").split())
+    return _CID_ARTIFACT_RE.sub("", text).strip()
 
 
 def _is_equity_row(row: list[str]) -> bool:
@@ -113,7 +122,7 @@ def _build_record(row: list[str], cols: dict, bulletin_date: dt.date, source_bul
     return {
         "date": bulletin_date,
         "ticker": ticker,
-        "name": _cell(row, cols["name"]) or None,
+        "name": _text_cell(row, cols["name"]) or None,
         "compartment": None,
         "close_price": parse_french_number(row[cols["close_price"]]),
         "change_pct": parse_french_number(row[cols["change_pct"]]),
