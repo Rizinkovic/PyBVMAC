@@ -204,13 +204,16 @@ def backfill(
         raise ValueError("checkpoint_every must be at least 1")
     session = session or PoliteSession()
     end = end or dt.date.today()
+    if start > end:
+        raise ValueError("start date must be on or before end date")
 
     discovery_started = time.perf_counter()
     try:
         bulletins = fetch.discover_bulletins(session, refresh_cache=refresh_archive)
     except FetchError as exc:
         logger.error("Could not enumerate the BVMAC archive: %s", exc)
-        return 0
+        # Do not disguise a failed archive request as a successful empty run.
+        raise
     discovery_seconds = time.perf_counter() - discovery_started
     in_range = [b for b in bulletins if b.date and start <= b.date <= end]
     manifest = Path(state_path) if state_path else _manifest_path(start, end)
