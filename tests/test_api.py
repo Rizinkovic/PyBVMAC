@@ -14,7 +14,7 @@ def test_module_exposes_backfill():
 def test_backfill_parses_dates_and_delegates(monkeypatch):
     captured = {}
 
-    def fake_backfill(start, end=None, session=None):
+    def fake_backfill(start, end=None, session=None, **kwargs):
         captured["start"] = start
         captured["end"] = end
         return 3
