@@ -67,3 +67,21 @@ def test_parser_stops_at_spaced_commentary_heading_and_reports_counts(monkeypatc
 )
 def test_heading_normalization_handles_spacing_and_accents(heading):
     assert real_layout._compact_heading(heading) == "COMMENTAIRESDUBULLETINOFFICIELDELACOTE"
+
+
+
+def test_extracted_instrument_name_preserves_spaces_between_words():
+    row = [""] * real_layout.EQUITY_NCOLS
+    row[real_layout.EQUITY_COLUMNS["mnemo"]] = "S C E"
+    row[real_layout.EQUITY_COLUMNS["name"]] = "SOCIETE CAMEROUNAISE DES EAUX"
+    row[real_layout.EQUITY_COLUMNS["close_price"]] = "1 234"
+    row[real_layout.EQUITY_COLUMNS["change_pct"]] = "2,5"
+    row[real_layout.EQUITY_COLUMNS["volume"]] = "10"
+    row[real_layout.EQUITY_COLUMNS["value_fcfa"]] = "12 340"
+
+    record = real_layout._build_record(
+        row, real_layout.EQUITY_COLUMNS, dt.date(2026, 1, 2), "BOC-20260102.pdf"
+    )
+
+    assert record["ticker"] == "SCE"
+    assert record["name"] == "SOCIETE CAMEROUNAISE DES EAUX"
