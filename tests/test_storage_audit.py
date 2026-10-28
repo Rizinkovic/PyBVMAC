@@ -39,6 +39,8 @@ def test_audit_reports_duplicate_keys_missing_prices_and_invalid_values(tmp_path
     assert report["duplicate_keys"] == 2
     assert report["missing_close_prices"] == 1
     assert report["invalid_numeric_values"] == 2
+    assert report["invalid_dates"] == 0
+    assert report["missing_source_bulletins"] == 0
     assert report["unique_tickers"] == 1
 
 
