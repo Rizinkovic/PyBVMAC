@@ -217,7 +217,7 @@ def parse_bulletin(
         # pdfplumber, so compare a whitespace-free copy as well.
         page_text = page.extract_text() or ""
         text_upper = page_text.upper()
-        compact_text = re.sub(r"\\s+", "", text_upper)
+        compact_text = re.sub(r"\s+", "", text_upper)
 
         # The market tables precede the bulletin commentary and company
         # profiles. Stop at the commentary divider rather than allowing a
