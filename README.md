@@ -68,7 +68,25 @@ pybvmac tickers                              # list known equity tickers
 pybvmac inspect SOCAPALM --start 2025-01-01  # equity history (alias resolved)
 pybvmac inspect ECMR6 --kind bond            # bond history (Mnemo, no alias)
 pybvmac index                                # BVMAC All Share Index history
+pybvmac audit                                # check local dataset integrity
+pybvmac audit --kind equities                # audit one dataset
 ```
+
+## Dataset integrity audit
+
+After collecting data, run:
+
+```bash
+pybvmac audit
+pybvmac audit --kind equities
+```
+
+This read-only report summarizes row counts, date ranges, duplicate natural
+keys, invalid dates/numeric values, missing source-bulletin references, and
+missing equity/bond tickers or closing prices. It is a first-line integrity
+check only: it **cannot prove that extracted values match the source PDF**.
+Before research or production use, compare representative stored rows against
+the original bulletins and document extraction coverage and known gaps.
 
 ## How it works
 
