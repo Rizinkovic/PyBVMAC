@@ -1,4 +1,5 @@
 import datetime as dt
+import logging
 
 from pybvmac import real_layout
 
@@ -18,6 +19,7 @@ class FakePdf:
 
 
 def test_parser_stops_at_spaced_commentary_heading_and_reports_counts(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     pages = [
         FakePage("index", "ALL SHARE INDEX"),
         FakePage("equities", "MARCHE DES ACTIONS"),
