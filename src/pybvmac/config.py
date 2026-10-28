@@ -30,6 +30,9 @@ USER_AGENT = (
 MIN_REQUEST_INTERVAL_SECONDS = 2.0
 REQUEST_TIMEOUT_SECONDS = 30
 
+# Archive listings are stable between runs; refresh at least hourly by default.
+ARCHIVE_CACHE_TTL_SECONDS = 3600
+
 # ---------------------------------------------------------------------------
 # Local storage
 # ---------------------------------------------------------------------------

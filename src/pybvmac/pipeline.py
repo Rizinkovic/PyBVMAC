@@ -5,7 +5,9 @@ fetch -> classify -> parse or OCR -> normalize/validate -> store
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
+import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -20,6 +22,7 @@ from .parse import parse_bulletin_pdf
 from .real_layout import parse_bulletin as parse_bulletin_real_layout
 
 logger = logging.getLogger("pybvmac")
+_CHECKPOINT_EVERY = 25
 
 
 class BulletinRecords(NamedTuple):
@@ -29,21 +32,27 @@ class BulletinRecords(NamedTuple):
     index: Optional[dict]
 
 
-def _validate(records: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Data-quality gate: separate plausible records from ones that need a
-    human to look at them, per NFR "Data quality" and FR-16.
+def _validate(
+    records: list[dict], *, require_price: bool = False
+) -> tuple[list[dict], list[dict]]:
+    """Separate plausible records from those needing human review.
+
+    Equity and bond trading records must have a close price. Index and
+    market-cap records use different value fields, so callers validate those
+    record types without requiring the "close_price" field.
     """
     good, review = [], []
     for record in records:
         price = record.get("close_price")
         is_trading_day = record.get("is_trading_day", True)
         confidence = record.get("confidence_score", 1.0)
-
-        plausible_price = price is None or 0 < price < 10_000_000
+        missing_required_price = require_price and price is None
+        plausible_price = not missing_required_price and (
+            price is None or 0 < price < 10_000_000
+        )
         low_confidence = record.get("extraction_method") == "ocr" and (
             confidence < config.OCR_CONFIDENCE_THRESHOLD
         )
-
         if is_trading_day and (not plausible_price or low_confidence):
             review.append(record)
         else:
@@ -52,102 +61,262 @@ def _validate(records: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def process_bulletin_file(pdf_path: Path, bulletin_date: dt.date) -> BulletinRecords:
-    """Run stages 2-4 on an already-downloaded bulletin PDF.
-
-    Tries the real BVMAC export layout first (real_layout.py, calibrated
-    against a genuine bulletin — see its module docstring), since it reads
-    equities, bonds, and the market-cap total in one pass and is the most
-    accurate for actual BOC bulletins. Falls back to the generic
-    alias-based table parser (parse.py) — or OCR for scanned bulletins —
-    when that layout isn't recognized, e.g. for older/different bulletin
-    templates.
-    """
+    """Parse an already-downloaded bulletin PDF."""
     source_bulletin = Path(pdf_path).name
+    stage_times = {"classify": 0.0, "pdf_parse": 0.0, "fallback_parse": 0.0, "ocr": 0.0}
     try:
-        if has_text_layer(str(pdf_path)):
+        stage_started = time.perf_counter()
+        text_layer = has_text_layer(str(pdf_path))
+        stage_times["classify"] = time.perf_counter() - stage_started
+
+        if text_layer:
+            stage_started = time.perf_counter()
             with pdfplumber.open(str(pdf_path)) as pdf:
                 equities, bonds, market_cap, index = parse_bulletin_real_layout(
                     pdf, bulletin_date, source_bulletin
                 )
-            if not equities and not bonds:
-                equities = parse_bulletin_pdf(str(pdf_path), bulletin_date, source_bulletin)
+            stage_times["pdf_parse"] = time.perf_counter() - stage_started
+
+            if not equities:
+                stage_started = time.perf_counter()
+                equities = parse_bulletin_pdf(
+                    str(pdf_path), bulletin_date, source_bulletin
+                )
+                stage_times["fallback_parse"] = time.perf_counter() - stage_started
         else:
-            equities = parse_scanned_bulletin(str(pdf_path), bulletin_date, source_bulletin)
+            stage_started = time.perf_counter()
+            equities = parse_scanned_bulletin(
+                str(pdf_path), bulletin_date, source_bulletin
+            )
+            stage_times["ocr"] = time.perf_counter() - stage_started
             bonds, market_cap, index = [], None, None
     except OCRNotAvailableError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise ParseError(f"Failed to parse {source_bulletin}: {exc}") from exc
 
-    if not equities and not bonds:
+    logger.info(
+        "Parse timings for %s: classify %.2fs, PDF layout %.2fs, "
+        "generic fallback %.2fs, OCR %.2fs",
+        source_bulletin, stage_times["classify"], stage_times["pdf_parse"],
+        stage_times["fallback_parse"], stage_times["ocr"],
+    )
+
+    if not equities and not bonds and not market_cap and not index:
         logger.warning("No records extracted from %s", source_bulletin)
-    return BulletinRecords(equities=equities, bonds=bonds, market_cap=market_cap, index=index)
+    return BulletinRecords(equities, bonds, market_cap, index)
 
 
 def _store(records: BulletinRecords) -> None:
-    good, review = _validate(records.equities)
-    if good:
-        storage.append(good, kind="equities")
-    if review:
-        storage.flag_for_review(review)
-        logger.warning("%d equity record(s) flagged for manual review", len(review))
-
-    if records.bonds:
-        good_bonds, review_bonds = _validate(records.bonds)
-        if good_bonds:
-            storage.append(good_bonds, kind="bonds")
-        if review_bonds:
-            storage.flag_for_review(review_bonds)
-            logger.warning("%d bond record(s) flagged for manual review", len(review_bonds))
-
-    if records.market_cap:
-        storage.append([records.market_cap], kind="market_cap")
-
-    if records.index:
-        storage.append([records.index], kind="index")
+    for kind, items in (
+        ("equities", records.equities),
+        ("bonds", records.bonds),
+        ("market_cap", [records.market_cap] if records.market_cap else []),
+        ("index", [records.index] if records.index else []),
+    ):
+        good, review = _validate(items, require_price=kind in ("equities", "bonds"))
+        if good:
+            storage.append(good, kind=kind)
+        if review:
+            storage.flag_for_review(review)
+            logger.warning("%d %s record(s) flagged for manual review", len(review), kind)
 
 
 def refresh(session: Optional[PoliteSession] = None) -> BulletinRecords:
-    """FR-01: fetch and store today's bulletin. Returns the parsed records."""
+    """Fetch and store today's bulletin."""
     session = session or PoliteSession()
+    started = time.perf_counter()
     path, bulletin = fetch.fetch_today_bulletin(session)
+    download_seconds = time.perf_counter() - started
+    parse_started = time.perf_counter()
     records = process_bulletin_file(path, bulletin.date)
+    parse_seconds = time.perf_counter() - parse_started
+    store_started = time.perf_counter()
     _store(records)
+    store_seconds = time.perf_counter() - store_started
+    logger.info(
+        "Refresh timings for %s: download/cache %.2fs, parse %.2fs, store %.2fs",
+        bulletin.filename, download_seconds, parse_seconds, store_seconds,
+    )
     return records
+
+
+def _manifest_path(start: dt.date, end: dt.date) -> Path:
+    """Use a range-specific checkpoint so unrelated backfills never collide."""
+    return config.CACHE_DIR / f"backfill-{start.isoformat()}-{end.isoformat()}.json"
+
+
+def _read_manifest(path: Path, resume: bool) -> set[str]:
+    if not resume or not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 1:
+            logger.warning("Ignoring unsupported backfill checkpoint: %s", path)
+            return set()
+        completed = payload.get("completed", [])
+        if not isinstance(completed, list) or not all(
+            isinstance(name, str) for name in completed
+        ):
+            logger.warning("Ignoring malformed backfill checkpoint: %s", path)
+            return set()
+        return set(completed)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not read checkpoint %s; restarting range: %s", path, exc)
+        return set()
+
+
+def _write_manifest(path: Path, completed: set[str]) -> None:
+    """Atomically persist the successful bulletin names."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(
+                {"schema_version": 1, "completed": sorted(completed)},
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def backfill(
     start: dt.date,
     end: Optional[dt.date] = None,
     session: Optional[PoliteSession] = None,
+    *,
+    resume: bool = True,
+    checkpoint_every: int = _CHECKPOINT_EVERY,
+    state_path: Optional[Path] = None,
+    refresh_archive: bool = False,
 ) -> int:
-    """FR-02: discover and process all bulletins in [start, end].
+    """Discover and process bulletins in [start, end], checkpointing progress.
 
-    Returns the number of bulletins successfully processed. Failures on
-    individual bulletins are logged and skipped rather than aborting the
-    whole backfill (an incomplete archive is expected, per section 16.1).
+    Successful batches are stored before their bulletin names are checkpointed.
+    If interrupted between those operations, replay is safe because storage
+    de-duplicates by bulletin identity. Failed/empty bulletins are retried on
+    the next run. Returns successful bulletins processed in this invocation.
     """
+    if checkpoint_every < 1:
+        raise ValueError("checkpoint_every must be at least 1")
     session = session or PoliteSession()
     end = end or dt.date.today()
+    if start > end:
+        raise ValueError("start date must be on or before end date")
 
+    discovery_started = time.perf_counter()
     try:
-        bulletins = fetch.discover_bulletins(session)
+        bulletins = fetch.discover_bulletins(session, refresh_cache=refresh_archive)
     except FetchError as exc:
         logger.error("Could not enumerate the BVMAC archive: %s", exc)
-        return 0
+        # Do not disguise a failed archive request as a successful empty run.
+        raise
+    discovery_seconds = time.perf_counter() - discovery_started
+    in_range = [b for b in bulletins if b.date and start <= b.date <= end]
+    manifest = Path(state_path) if state_path else _manifest_path(start, end)
+    completed = _read_manifest(manifest, resume)
+    todo = [b for b in in_range if b.filename not in completed]
+    logger.info(
+        "Archive discovery: %.2fs; %d bulletins in range, %d already checkpointed, "
+        "%d to process",
+        discovery_seconds, len(in_range), len(in_range) - len(todo), len(todo),
+    )
 
-    in_range = [b for b in bulletins if start <= b.date <= end]
-    processed = 0
-    for bulletin in in_range:
+    pending: dict[str, list[dict]] = {
+        "equities": [], "bonds": [], "market_cap": [], "index": []
+    }
+    pending_review: list[dict] = []
+    pending_names: set[str] = set()
+    processed_this_run = 0
+    timings = {"download_cache": 0.0, "parse": 0.0, "storage": 0.0}
+    failures = 0
+
+    def checkpoint() -> None:
+        if not pending_names:
+            return
+        store_started = time.perf_counter()
+        for kind, items in pending.items():
+            if items:
+                storage.append(items, kind=kind)
+        if pending_review:
+            storage.flag_for_review(pending_review)
+        timings["storage"] += time.perf_counter() - store_started
+        # Persist completion only after records are safely stored. Replaying
+        # after a crash before this write is safe because storage append is idempotent.
+        completed.update(pending_names)
+        _write_manifest(manifest, completed)
+        logger.info(
+            "Checkpoint saved: %d new bulletins; %d total completed in range",
+            len(pending_names), len(completed.intersection(b.filename for b in in_range)),
+        )
+        for values in pending.values():
+            values.clear()
+        pending_review.clear()
+        pending_names.clear()
+
+    for position, bulletin in enumerate(todo, start=1):
         try:
+            stage_started = time.perf_counter()
             path = fetch.download_bulletin(session, bulletin)
-            records = process_bulletin_file(path, bulletin.date)
-            _store(records)
-            if records.equities or records.bonds:
-                processed += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Skipping %s: %s", bulletin.filename, exc)
-            continue
+            bulletin_download_seconds = time.perf_counter() - stage_started
+            timings["download_cache"] += bulletin_download_seconds
 
-    logger.info("Backfill complete: %d/%d bulletins processed", processed, len(in_range))
-    return processed
+            stage_started = time.perf_counter()
+            records = process_bulletin_file(path, bulletin.date)
+            bulletin_parse_seconds = time.perf_counter() - stage_started
+            timings["parse"] += bulletin_parse_seconds
+            logger.info(
+                "Backfill bulletin %s: download/cache %.2fs, parse %.2fs, records "
+                "equities=%d bonds=%d market_cap=%d index=%d",
+                bulletin.filename,
+                bulletin_download_seconds,
+                bulletin_parse_seconds,
+                len(records.equities),
+                len(records.bonds),
+                int(records.market_cap is not None),
+                int(records.index is not None),
+            )
+
+            has_records = bool(
+                records.equities or records.bonds or records.market_cap or records.index
+            )
+            if not has_records:
+                failures += 1
+                logger.warning("No market records extracted from %s; will retry later", bulletin.filename)
+                continue
+
+            for kind, items in (
+                ("equities", records.equities),
+                ("bonds", records.bonds),
+                ("market_cap", [records.market_cap] if records.market_cap else []),
+                ("index", [records.index] if records.index else []),
+            ):
+                good, review = _validate(items, require_price=kind in ("equities", "bonds"))
+                pending[kind].extend(good)
+                pending_review.extend(review)
+            pending_names.add(bulletin.filename)
+            processed_this_run += 1
+
+            if len(pending_names) >= checkpoint_every:
+                checkpoint()
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            logger.error("Failed %s; it will be retried on the next run: %s", bulletin.filename, exc)
+
+        if position % 10 == 0 or position == len(todo):
+            logger.info(
+                "Backfill progress: %d/%d pending bulletins visited; %d successful this run",
+                position, len(todo), processed_this_run,
+            )
+
+    checkpoint()
+    logger.info(
+        "Backfill summary: discovery %.2fs, download/cache %.2fs, parse/OCR %.2fs, "
+        "storage %.2fs; %d/%d processed this run, %d failed/empty, %d checkpointed",
+        discovery_seconds, timings["download_cache"], timings["parse"], timings["storage"],
+        processed_this_run, len(todo), failures, len(completed.intersection(b.filename for b in in_range)),
+    )
+    return processed_this_run

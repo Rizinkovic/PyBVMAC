@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
+import os
 
 import pandas as pd
 
@@ -82,12 +83,24 @@ def load(kind: str = "equities") -> pd.DataFrame:
 
 
 def save_all(df: pd.DataFrame, kind: str = "equities") -> Path:
-    """Overwrite the dataset for a given kind with ``df``."""
+    """Atomically replace a canonical dataset with ``df``.
+
+    Write to a sibling temporary file first. If serialization or the process
+    fails, the previous complete dataset remains available.
+    """
     path = _dataset_path(kind)
-    if path.suffix == ".parquet":
-        df.to_parquet(path, index=False)
-    else:
-        df.to_csv(path, index=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        if path.suffix == ".parquet":
+            df.to_parquet(temporary, index=False)
+        else:
+            df.to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        # A failed write may leave a partial temporary file behind.
+        if temporary.exists():
+            temporary.unlink()
     return path
 
 
@@ -125,3 +138,82 @@ def flag_for_review(records: Iterable[dict]) -> None:
     else:
         combined = new_df
     combined.to_csv(config.REVIEW_LOG_PATH, index=False)
+
+
+
+def audit(kind: str = "all") -> dict[str, dict]:
+    """Summarize basic integrity checks for locally stored datasets.
+
+    This is a diagnostic, not proof that source-PDF values were extracted
+    correctly. It checks obvious structural issues without modifying data.
+    """
+    kinds = ("equities", "bonds", "market_cap", "index") if kind == "all" else (kind,)
+    reports: dict[str, dict] = {}
+    for dataset_kind in kinds:
+        if dataset_kind not in {"equities", "bonds", "market_cap", "index"}:
+            raise ValueError(
+                "kind must be 'all', 'equities', 'bonds', 'market_cap', or 'index'"
+            )
+        df = load(dataset_kind)
+        report = {
+            "rows": int(len(df)),
+            "date_min": None,
+            "date_max": None,
+            "duplicate_keys": 0,
+            "invalid_dates": 0,
+            "invalid_numeric_values": 0,
+            "missing_source_bulletins": 0,
+        }
+        if dataset_kind in {"equities", "bonds"}:
+            report.update({
+                "missing_tickers": 0,
+                "missing_close_prices": 0,
+                "unique_tickers": 0,
+            })
+        if df.empty:
+            reports[dataset_kind] = report
+            continue
+
+        dates = pd.to_datetime(df["date"], errors="coerce")
+        valid_dates = dates.dropna()
+        if not valid_dates.empty:
+            report["date_min"] = valid_dates.min().date().isoformat()
+            report["date_max"] = valid_dates.max().date().isoformat()
+        report["invalid_dates"] = int(dates.isna().sum())
+
+        keys = [key for key in _DEDUPE_KEYS[dataset_kind] if key in df.columns]
+        if keys:
+            report["duplicate_keys"] = int(df.duplicated(subset=keys, keep=False).sum())
+
+        numeric_columns = {
+            "equities": ("close_price", "volume", "value_fcfa"),
+            "bonds": ("close_price", "volume", "value_fcfa"),
+            "market_cap": ("market_cap_fcfa",),
+            "index": ("index_value",),
+        }[dataset_kind]
+        invalid = pd.Series(False, index=df.index)
+        for column in numeric_columns:
+            if column not in df.columns:
+                continue
+            values = pd.to_numeric(df[column], errors="coerce")
+            invalid |= values.isna() | (values < 0)
+            if column in {"close_price", "market_cap_fcfa", "index_value"}:
+                invalid |= values.notna() & (values <= 0)
+        report["invalid_numeric_values"] = int(invalid.sum())
+        report["missing_source_bulletins"] = int(
+            df["source_bulletin"].isna().sum()
+            if "source_bulletin" in df.columns else len(df)
+        )
+
+        if dataset_kind in {"equities", "bonds"}:
+            report["missing_tickers"] = int(
+                df["ticker"].isna().sum() if "ticker" in df.columns else len(df)
+            )
+            report["missing_close_prices"] = int(
+                df["close_price"].isna().sum()
+                if "close_price" in df.columns else len(df)
+            )
+            report["unique_tickers"] = int(df["ticker"].nunique(dropna=True)) if "ticker" in df.columns else 0
+
+        reports[dataset_kind] = report
+    return reports

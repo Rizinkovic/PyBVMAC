@@ -34,9 +34,9 @@ dev = ["pytest>=7.4", "pytest-cov>=4.1"]
 pybvmac = "pybvmac.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/song-richard/pybvmac"
-Documentation = "https://github.com/song-richard/pybvmac#readme"
-Issues = "https://github.com/song-richard/pybvmac/issues"
+Homepage = "https://github.com/Rizinkovic/PyBVMAC"
+Documentation = "https://github.com/Rizinkovic/PyBVMAC#readme"
+Issues = "https://github.com/Rizinkovic/PyBVMAC/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

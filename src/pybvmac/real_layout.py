@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import unicodedata
 from typing import Optional
 
 from .grid import extract_grid, squeeze
@@ -73,16 +74,35 @@ BOND_COLUMNS = {
 BOND_NCOLS = 21
 
 
+def _compact_heading(text: str) -> str:
+    """Normalize a PDF heading despite spacing, punctuation, or accents."""
+    decomposed = unicodedata.normalize("NFKD", text.upper())
+    without_accents = "".join(
+        character for character in decomposed
+        if not unicodedata.combining(character)
+    )
+    return re.sub(r"[^A-Z0-9]", "", without_accents)
+
+
 _CID_ARTIFACT_RE = re.compile(r"\(cid:\d+\)")
 
 
 def _cell(row: list[str], idx: int) -> str:
+    """Read a compact identifier/numeric cell, removing PDF glyph spacing."""
     if idx >= len(row):
         return ""
     text = squeeze(row[idx])
     # pdfplumber renders a handful of glyphs it can't map (typically an
     # apostrophe in these bulletins) as a literal "(cid:N)" placeholder.
     return _CID_ARTIFACT_RE.sub("", text)
+
+
+def _text_cell(row: list[str], idx: int) -> str:
+    """Read a free-text cell while preserving real spaces between words."""
+    if idx >= len(row):
+        return ""
+    text = " ".join((row[idx] or "").split())
+    return _CID_ARTIFACT_RE.sub("", text).strip()
 
 
 def _is_equity_row(row: list[str]) -> bool:
@@ -102,7 +122,7 @@ def _build_record(row: list[str], cols: dict, bulletin_date: dt.date, source_bul
     return {
         "date": bulletin_date,
         "ticker": ticker,
-        "name": _cell(row, cols["name"]) or None,
+        "name": _text_cell(row, cols["name"]) or None,
         "compartment": None,
         "close_price": parse_french_number(row[cols["close_price"]]),
         "change_pct": parse_french_number(row[cols["change_pct"]]),
@@ -115,28 +135,33 @@ def _build_record(row: list[str], cols: dict, bulletin_date: dt.date, source_bul
     }
 
 
-def parse_equities_page(page, bulletin_date: dt.date, source_bulletin: str) -> list[dict]:
-    """Extract equity records from a page containing "MARCHE DES ACTIONS"."""
+def parse_equities_page(
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
+) -> list[dict]:
+    """Extract equity records; accept precomputed grid rows to avoid repeat work."""
     records = []
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if _is_equity_row(row) and _cell(row, EQUITY_COLUMNS["mnemo"]):
             records.append(_build_record(row, EQUITY_COLUMNS, bulletin_date, source_bulletin))
     return records
 
 
-def parse_bonds_page(page, bulletin_date: dt.date, source_bulletin: str) -> list[dict]:
-    """Extract bond records from a page containing any of the "OBLIGATIONS
-    DES ETATS / REGIONALES / PRIVEES" tables (any number of them per page).
-    """
+def parse_bonds_page(
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
+) -> list[dict]:
+    """Extract bond records; accept precomputed grid rows to avoid repeat work."""
     records = []
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if _is_bond_row(row) and _cell(row, BOND_COLUMNS["mnemo"]):
             records.append(_build_record(row, BOND_COLUMNS, bulletin_date, source_bulletin))
     return records
 
 
 def parse_market_cap_page(
-    page, bulletin_date: dt.date, source_bulletin: str
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
 ) -> Optional[dict]:
     """Extract the market-cap total from the "CAPITALISATION BOURSIERE" page.
 
@@ -144,7 +169,7 @@ def parse_market_cap_page(
     to last is "Total") and reads the final column — the global
     ("Globale") capitalization figure.
     """
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if len(row) < 3:
             continue
         if any(squeeze(cell) == "Total" for cell in row):
@@ -159,7 +184,8 @@ def parse_market_cap_page(
 
 
 def parse_index_page(
-    page, bulletin_date: dt.date, source_bulletin: str
+    page, bulletin_date: dt.date, source_bulletin: str,
+    rows: Optional[list[list[str]]] = None,
 ) -> Optional[dict]:
     """Extract the BVMAC All Share Index (BVMAC-AS) value from the cover
     page. The bulletin also plots a small history chart there, but that's a
@@ -168,7 +194,7 @@ def parse_index_page(
     """
     index_value = None
     change_pct = None
-    for row in extract_grid(page):
+    for row in extract_grid(page) if rows is None else rows:
         if len(row) < 2:
             continue
         label = squeeze(row[0])
@@ -201,13 +227,86 @@ def parse_bulletin(
     market_cap: Optional[dict] = None
     index: Optional[dict] = None
 
+    bond_section_active = False
+    pages_with_tables = 0
+    pages_visited = 0
+
     for page in pdf.pages:
-        equities.extend(parse_equities_page(page, bulletin_date, source_bulletin))
-        bonds.extend(parse_bonds_page(page, bulletin_date, source_bulletin))
-        text_upper = (page.extract_text() or "").upper()
-        if market_cap is None and "CAPITALISATION BOURSIERE" in text_upper:
-            market_cap = parse_market_cap_page(page, bulletin_date, source_bulletin)
-        if index is None and "ALL SHARE INDEX" in text_upper:
-            index = parse_index_page(page, bulletin_date, source_bulletin)
+        pages_visited += 1
+        # Text extraction is much cheaper than reconstructing every cell from
+        # vector geometry. Some continuation-page headings are spaced out by
+        # pdfplumber, so compare a whitespace-free copy as well.
+        page_text = page.extract_text() or ""
+        text_upper = page_text.upper()
+        compact_text = _compact_heading(text_upper)
+
+        # The market tables precede the bulletin commentary and company
+        # profiles. Stop at the commentary divider rather than allowing a
+        # bond heading on an earlier page to trigger grid extraction for the
+        # rest of the document.
+        if "COMMENTAIRESDUBULLETINOFFICIELDELACOTE" in compact_text:
+            break
+
+        has_equity_heading = (
+            "MARCHE DES ACTIONS" in text_upper
+            or "MARCHEDESACTIONS" in compact_text
+        )
+        has_bond_heading = (
+            "MARCHEDESOBLIGATIONS" in compact_text
+            or (
+                "OBLIGATIONS" in compact_text
+                and any(term in compact_text for term in ("ETATS", "REGIONALES", "PRIVEES"))
+            )
+        )
+        has_market_cap_heading = (
+            "CAPITALISATION BOURSIERE" in text_upper
+            or "CAPITALISATIONBOURSIERE" in compact_text
+        )
+        has_index_heading = (
+            "ALL SHARE INDEX" in text_upper
+            or "ALLSHAREINDEX" in compact_text
+        )
+
+        if has_bond_heading:
+            bond_section_active = True
+        if has_market_cap_heading:
+            bond_section_active = False
+
+        needs_grid = (
+            has_equity_heading
+            or (bond_section_active and not has_market_cap_heading)
+            or has_market_cap_heading
+            or has_index_heading
+            or not text_upper.strip()
+        )
+        if not needs_grid:
+            continue
+
+        rows = extract_grid(page)
+        pages_with_tables += 1
+
+        if has_equity_heading:
+            equities.extend(
+                parse_equities_page(page, bulletin_date, source_bulletin, rows=rows)
+            )
+        if bond_section_active and not has_market_cap_heading:
+            bonds.extend(
+                parse_bonds_page(page, bulletin_date, source_bulletin, rows=rows)
+            )
+        if market_cap is None and has_market_cap_heading:
+            market_cap = parse_market_cap_page(
+                page, bulletin_date, source_bulletin, rows=rows
+            )
+        if index is None and has_index_heading:
+            index = parse_index_page(
+                page, bulletin_date, source_bulletin, rows=rows
+            )
+
+    # Kept as a debug-level diagnostic so normal runs remain readable.
+    import logging
+    logging.getLogger("pybvmac").info(
+        "Real-layout parser visited %d/%d pages and extracted grids from %d for %s",
+        pages_visited, len(pdf.pages), pages_with_tables, source_bulletin,
+    )
 
     return equities, bonds, market_cap, index
