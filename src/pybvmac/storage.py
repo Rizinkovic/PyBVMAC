@@ -162,7 +162,14 @@ def audit(kind: str = "all") -> dict[str, dict]:
             "duplicate_keys": 0,
             "invalid_dates": 0,
             "invalid_numeric_values": 0,
+            "missing_source_bulletins": 0,
         }
+        if dataset_kind in {"equities", "bonds"}:
+            report.update({
+                "missing_tickers": 0,
+                "missing_close_prices": 0,
+                "unique_tickers": 0,
+            })
         if df.empty:
             reports[dataset_kind] = report
             continue
