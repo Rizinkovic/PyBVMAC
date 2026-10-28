@@ -3,6 +3,10 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
+import pytest
+
+from pybvmac.exceptions import FetchError
+
 from pybvmac import pipeline
 
 
@@ -133,3 +137,21 @@ def test_validate_allows_index_record_without_close_price_field():
 
     assert good == [record]
     assert review == []
+
+
+
+def test_backfill_propagates_archive_discovery_failure(monkeypatch):
+    def fail_discovery(*args, **kwargs):
+        raise FetchError("temporary archive outage")
+
+    monkeypatch.setattr(pipeline.fetch, "discover_bulletins", fail_discovery)
+
+    with pytest.raises(FetchError, match="temporary archive outage"):
+        pipeline.backfill(dt.date(2026, 1, 1), dt.date(2026, 1, 2), session=object())
+
+
+def test_backfill_rejects_reversed_date_range():
+    with pytest.raises(ValueError, match="start date must be on or before end date"):
+        pipeline.backfill(
+            dt.date(2026, 1, 3), dt.date(2026, 1, 2), session=object()
+        )
