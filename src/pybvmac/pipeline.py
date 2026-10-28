@@ -32,14 +32,24 @@ class BulletinRecords(NamedTuple):
     index: Optional[dict]
 
 
-def _validate(records: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Separate plausible records from those needing human review."""
+def _validate(
+    records: list[dict], *, require_price: bool = False
+) -> tuple[list[dict], list[dict]]:
+    """Separate plausible records from those needing human review.
+
+    Equity and bond trading records must have a close price. Index and
+    market-cap records use different value fields, so callers validate those
+    record types without requiring the "close_price" field.
+    """
     good, review = [], []
     for record in records:
         price = record.get("close_price")
         is_trading_day = record.get("is_trading_day", True)
         confidence = record.get("confidence_score", 1.0)
-        plausible_price = price is None or 0 < price < 10_000_000
+        missing_required_price = require_price and price is None
+        plausible_price = not missing_required_price and (
+            price is None or 0 < price < 10_000_000
+        )
         low_confidence = record.get("extraction_method") == "ocr" and (
             confidence < config.OCR_CONFIDENCE_THRESHOLD
         )
@@ -104,7 +114,7 @@ def _store(records: BulletinRecords) -> None:
         ("market_cap", [records.market_cap] if records.market_cap else []),
         ("index", [records.index] if records.index else []),
     ):
-        good, review = _validate(items)
+        good, review = _validate(items, require_price=kind in ("equities", "bonds"))
         if good:
             storage.append(good, kind=kind)
         if review:
@@ -281,7 +291,7 @@ def backfill(
                 ("market_cap", [records.market_cap] if records.market_cap else []),
                 ("index", [records.index] if records.index else []),
             ):
-                good, review = _validate(items)
+                good, review = _validate(items, require_price=kind in ("equities", "bonds"))
                 pending[kind].extend(good)
                 pending_review.extend(review)
             pending_names.add(bulletin.filename)
