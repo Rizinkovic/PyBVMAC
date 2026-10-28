@@ -209,9 +209,10 @@ def parse_bulletin(
 
     bond_section_active = False
     pages_with_tables = 0
-    table_section_ended = False
+    pages_visited = 0
 
     for page in pdf.pages:
+        pages_visited += 1
         # Text extraction is much cheaper than reconstructing every cell from
         # vector geometry. Some continuation-page headings are spaced out by
         # pdfplumber, so compare a whitespace-free copy as well.
@@ -224,7 +225,6 @@ def parse_bulletin(
         # bond heading on an earlier page to trigger grid extraction for the
         # rest of the document.
         if "COMMENTAIRESDUBULLETINOFFICIELDELACOTE" in compact_text:
-            table_section_ended = True
             break
 
         has_equity_heading = (
@@ -285,8 +285,8 @@ def parse_bulletin(
     # Kept as a debug-level diagnostic so normal runs remain readable.
     import logging
     logging.getLogger("pybvmac").info(
-        "Real-layout parser scanned %d/%d pages for %s",
-        pages_with_tables, len(pdf.pages), source_bulletin,
+        "Real-layout parser visited %d/%d pages and extracted grids from %d for %s",
+        pages_visited, len(pdf.pages), pages_with_tables, source_bulletin,
     )
 
     return equities, bonds, market_cap, index
