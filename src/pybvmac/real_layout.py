@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import unicodedata
 from typing import Optional
 
 from .grid import extract_grid, squeeze
@@ -71,6 +72,16 @@ BOND_COLUMNS = {
     "change_pct": 19,
 }
 BOND_NCOLS = 21
+
+
+def _compact_heading(text: str) -> str:
+    """Normalize a PDF heading despite spacing, punctuation, or accents."""
+    decomposed = unicodedata.normalize("NFKD", text.upper())
+    without_accents = "".join(
+        character for character in decomposed
+        if not unicodedata.combining(character)
+    )
+    return re.sub(r"[^A-Z0-9]", "", without_accents)
 
 
 _CID_ARTIFACT_RE = re.compile(r"\(cid:\d+\)")
@@ -218,7 +229,7 @@ def parse_bulletin(
         # pdfplumber, so compare a whitespace-free copy as well.
         page_text = page.extract_text() or ""
         text_upper = page_text.upper()
-        compact_text = re.sub(r"[^A-Z0-9]", "", text_upper)
+        compact_text = _compact_heading(text_upper)
 
         # The market tables precede the bulletin commentary and company
         # profiles. Stop at the commentary divider rather than allowing a
