@@ -31,7 +31,7 @@ def test_backfill_parses_dates_and_delegates(monkeypatch):
 def test_backfill_end_defaults_to_none(monkeypatch):
     captured = {}
 
-    def fake_backfill(start, end=None, session=None):
+    def fake_backfill(start, end=None, session=None, **kwargs):
         captured["end"] = end
         return 0
 
