@@ -231,13 +231,11 @@ def parse_bulletin(
             "MARCHE DES ACTIONS" in text_upper
             or "MARCHEDESACTIONS" in compact_text
         )
-        has_bond_heading = any(
-            marker in compact_text
-            for marker in (
-                "MARCHEDESOBLIGATIONS",
-                "OBLIGATIONSDES ETATS".replace(" ", ""),
-                "OBLIGATIONSREGIONALES",
-                "OBLIGATIONSPRIVEES",
+        has_bond_heading = (
+            "MARCHEDESOBLIGATIONS" in compact_text
+            or (
+                "OBLIGATIONS" in compact_text
+                and any(term in compact_text for term in ("ETATS", "REGIONALES", "PRIVEES"))
             )
         )
         has_market_cap_heading = (
